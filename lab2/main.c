@@ -250,16 +250,6 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive) {
      *       closedir()
      *   See the lab description for further hints
      */
-    //dirname不是目录
-    /*
-    struct stat sb;
-    if( !is_dir(dirname)){
-        if(!list_long)
-            printf("%s\n",dirname);
-        return;
-    }*/
-
-    //dirname是目录
     if(recursive){
         printf("%s:\n",dirname);
     }
@@ -288,6 +278,7 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive) {
     }
     free(pathandname);
     printf("\n");
+    // 如果没有-R选项，程序到这里就结束了
     if(!recursive){
         closedir(dirp);
         return;
@@ -356,7 +347,6 @@ int main(int argc, char* argv[]) {
                 list_long = true;
                 break;
             case 'R':
-                printf("rrrrr\n");
                 recursive = true;
                 break;
             default:
@@ -381,6 +371,7 @@ int main(int argc, char* argv[]) {
     for (int i = optind; i < argc; i++) {
         list_dir(argv[i], list_long, list_all, recursive);
     }
-    NOT_YET_IMPLEMENTED("Listing files");
+    NOT_YET_IMPLEMENTED("help");
+    NOT_YET_IMPLEMENTED("handle error");
     exit(err_code);
 }
