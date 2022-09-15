@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -25,6 +26,8 @@ bool is_dir(char* pathandname);
 const char* ftype_to_str(mode_t mode);
 void list_file(char* pathandname, char* name, bool list_long);
 void list_dir(char* dirname, bool list_long, bool list_all, bool recursive);
+
+#define PATH_MAX 4096 //max path length in linux
 
 /*
  * You can use the NOT_YET_IMPLEMENTED macro to error out when you reach parts
@@ -149,8 +152,12 @@ bool test_file(char* pathandname) {
  */
 bool is_dir(char* pathandname) {
     /* TODO: fillin */
-
-    return false;
+    struct stat sb;
+    if(stat(pathandname,&sb)==-1){
+        PRINT_ERROR("is_dir","couldn't open file or directory",pathandname);
+        exit(1);
+    }
+    return S_ISDIR(sb.st_mode);
 }
 
 /* convert the mode field in a struct stat to a file type, for -l printing */
@@ -198,6 +205,26 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive) {
      *       closedir()
      *   See the lab description for further hints
      */
+    if( !is_dir(dirname)){
+        printf("%s\n",dirname);
+        return;
+    }
+    DIR *dirp;
+    if((dirp = opendir(dirname)) == NULL) {
+        PRINT_ERROR("list_dir","couldn't open file",dirname);
+        return;
+    }
+    struct dirent *dp;
+    char* fname;
+    while((dp=readdir(dirp))!=NULL){
+        fname=dp->d_name;
+        if(fname[0]=='.'){
+            if(!list_all) continue;
+        }
+        printf("%s\n",fname);
+    }
+    closedir(dirp);
+    return;
 }
 
 int main(int argc, char* argv[]) {
@@ -205,7 +232,7 @@ int main(int argc, char* argv[]) {
     // unsigned.
     int opt;
     err_code = 0;
-    bool list_long = false, list_all = false;
+    bool list_long = false, list_all = false, recursive=false;
     // We make use of getopt_long for argument parsing, and this
     // (single-element) array is used as input to that function. The `struct
     // option` helps us parse arguments of the form `--FOO`. Refer to `man 3
@@ -237,18 +264,25 @@ int main(int argc, char* argv[]) {
                 break;
         }
     }
-
     // TODO: Replace this.
+    printf("optind=%d argc=%d\n",optind,argc);
+    //获取当前路经
+        char cwd[PATH_MAX];
+        if(getcwd(cwd,PATH_MAX)==NULL){
+            PRINT_ERROR("main","get work directory faild","");
+            exit(1);
+        }
+        printf("current directory：%s\n",cwd);
     if (optind < argc) {
-        printf("Optional arguments: ");
+        //printf("Optional arguments: \n");
+    }
+    if(optind == argc){
+        list_dir(cwd,list_long,list_all,recursive);
     }
     for (int i = optind; i < argc; i++) {
-        printf("%s ", argv[i]);
+        printf("%d:%s\n", argc,argv[i]);
+        list_dir(argv[i], list_long, list_all, recursive);
     }
-    if (optind < argc) {
-        printf("\n");
-    }
-
     NOT_YET_IMPLEMENTED("Listing files");
     exit(err_code);
 }
