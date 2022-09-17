@@ -24,10 +24,10 @@ void handle_error(char* fullname, char* action);
 bool test_file(char* pathandname);
 bool is_dir(char* pathandname);
 const char* ftype_to_str(mode_t mode);
-void list_file(char* pathandname, char* name, bool list_long);
-void list_dir(char* dirname, bool list_long, bool list_all, bool recursive);
+void list_file(char* pathandname, char* name, bool list_long, bool human_readable);
+void list_dir(char *dirname, bool list_long, bool list_all, bool recursive, bool human_readable);
 
-#define PATH_MAX 4096 //max path length in linux
+#define PATH_MAX 4096 // Max path length in linux
 #define USRNAME_MAX 32
 #define GRPNAME_MAX 32
 #define DATESTR_MAX 15
@@ -166,9 +166,11 @@ bool is_dir(char* pathandname) {
 /* convert the mode field in a struct stat to a file type, for -l printing */
 const char* ftype_to_str(mode_t mode) {
     /* TODO: fillin */
-
     return "?";
 }
+
+long total; // 在-l模式下当前目录文件总大小
+int maxeidth; // 在-l模式下，表示此时文件所在目录下最大的文件的大小所需要的字符串宽度
 
 /* list_file():
  * implement the logic for listing a single file.
@@ -184,7 +186,7 @@ const char* ftype_to_str(mode_t mode) {
  *   requires only the 'name' part. So we pass in both. An alternative
  *   implementation would pass in pathandname and parse out 'name'.
  */
-void list_file(char* pathandname, char* name, bool list_long) {
+void list_file(char* pathandname, char* name, bool list_long, bool human_readable) {
     /* TODO: fill in*/
     /*
     * 输出简略信息
@@ -197,9 +199,8 @@ void list_file(char* pathandname, char* name, bool list_long) {
      * 输出详细信息
      */
     struct stat sb;
-    if (stat(pathandname, &sb) == -1)
-    {
-        PRINT_ERROR("list_dir", "couldn't open file or directory", pathandname);
+    if (stat(pathandname, &sb) == -1){
+        handle_error("couldn't open file or directory", pathandname);
         exit(1);
     }
     //获取权限信息
@@ -222,11 +223,11 @@ void list_file(char* pathandname, char* name, bool list_long) {
     char grpname[GRPNAME_MAX];
     group_for_gid(sb.st_gid, grpname, GRPNAME_MAX);
     //获取文件大小
-    int size = sb.st_size;
+    long size = sb.st_size;
     //获取创建日期
     char datestr[DATESTR_MAX];
     date_string(&sb.st_ctim, datestr, DATESTR_MAX);
-    printf("%s %d %s %s %5d %s %s\n", permission, num_link, usrname, grpname, size, datestr, name);
+    printf("%s %d %s %s %5ld %s %s\n", permission, num_link, usrname, grpname, size, datestr, name);
     return;
 }
 
@@ -238,7 +239,7 @@ void list_file(char* pathandname, char* name, bool list_long) {
  *    - list_all: are we in "-a" mode?
  *    - recursive: are we supposed to list sub-directories?
  */
-void list_dir(char* dirname, bool list_long, bool list_all, bool recursive) {
+void list_dir(char* dirname, bool list_long, bool list_all, bool recursive, bool human_readable) {
     /* TODO: fill in
      *   You'll probably want to make use of:
      *       opendir()
@@ -250,23 +251,40 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive) {
      *       closedir()
      *   See the lab description for further hints
      */
-    if(recursive){
-        printf("%s:\n",dirname);
-    }
     DIR *dirp;
     if((dirp = opendir(dirname)) == NULL) {
         PRINT_ERROR("list_dir","couldn't open file",dirname);
         return;
     }
-
+    //处理目录尾的slash
     int i=strlen(dirname);
     if(dirname[i-1]=='/'){
         dirname[i-1]='\0';
     }
-
     struct dirent *dp;
+    // 预处理,获取文件总大小，最大大小等信息
+    total= 0;
+    int maxsz = 0; // 在-l模式下，表示此时文件所在目录下最大的文件的大小
+    struct stat sb;
+    char *pathandname = (char *)malloc(PATH_MAX * sizeof(char));
+    while((dp=readdir(dirp))!=NULL){
+        snprintf(pathandname,PATH_MAX,"%s%s%s",dirname,"/",dp->d_name);
+        if (stat(pathandname, &sb) == -1){
+            handle_error("couldn't open file or directory", pathandname);
+            exit(1);
+        }
+        total+=sb.st_size;
+        maxsz=sb.st_size>maxsz?sb.st_size:maxsz;
+    }
+    if(recursive){
+        printf("%s:\n",dirname);
+    }
+    if(list_long){
+        printf("total %ld\n",total);
+    }
+    // 非-R模式下的打印输出
     char *fname;
-    char *pathandname=(char *)malloc(PATH_MAX*sizeof(char));
+    rewinddir(dirp);
     while((dp=readdir(dirp))!=NULL){
         fname=dp->d_name;
         //对于隐藏文件或目录，如果没有-a选项直接跳过
@@ -274,7 +292,7 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive) {
             continue;
         }
         snprintf(pathandname,PATH_MAX,"%s%s%s",dirname,"/",fname);
-        list_file(pathandname,fname,list_long);
+        list_file(pathandname,fname,list_long,human_readable);
     }
     free(pathandname);
     printf("\n");
@@ -283,6 +301,7 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive) {
         closedir(dirp);
         return;
     }
+    // 有-R选项，继续递归处理
     rewinddir(dirp);
     char *nxt_dirname=(char *)malloc(PATH_MAX*sizeof(char));
     while((dp=readdir(dirp))!=NULL){
@@ -316,7 +335,7 @@ int main(int argc, char* argv[]) {
     // unsigned.
     int opt;
     err_code = 0;
-    bool list_long = false, list_all = false, recursive=false;
+    bool list_long = false, list_all = false, recursive=false, human_readable=false;
     // We make use of getopt_long for argument parsing, and this
     // (single-element) array is used as input to that function. The `struct
     // option` helps us parse arguments of the form `--FOO`. Refer to `man 3
@@ -326,7 +345,7 @@ int main(int argc, char* argv[]) {
 
     // This loop is used for argument parsing. Refer to `man 3 getopt_long` to
     // better understand what is going on here.
-    while ((opt = getopt_long(argc, argv, "1alR", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "1alRh", opts, NULL)) != -1) {
         switch (opt) {
             case '\a':
                 // Handle the case that the user passed in `--help`. (In the
@@ -349,6 +368,8 @@ int main(int argc, char* argv[]) {
             case 'R':
                 recursive = true;
                 break;
+            case 'h':
+                human_readable = true;
             default:
                 printf("Unimplemented flag %d\n", opt);
                 break;
@@ -366,12 +387,13 @@ int main(int argc, char* argv[]) {
         //printf("Optional arguments: \n");
     }
     if(optind == argc){
-        list_dir(".",list_long,list_all,recursive);
+        list_dir(".", list_long, list_all, recursive, human_readable);
     }
     for (int i = optind; i < argc; i++) {
-        list_dir(argv[i], list_long, list_all, recursive);
+        list_dir(argv[i], list_long, list_all, recursive, human_readable);
     }
     NOT_YET_IMPLEMENTED("help");
     NOT_YET_IMPLEMENTED("handle error");
+    NOT_YET_IMPLEMENTED("-h");
     exit(err_code);
 }
