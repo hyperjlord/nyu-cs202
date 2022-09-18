@@ -31,6 +31,7 @@ void list_dir(char *dirname, bool list_long, bool list_all, bool recursive, bool
 #define USRNAME_MAX 32
 #define GRPNAME_MAX 32
 #define DATESTR_MAX 15
+#define WIDTHSTR_MAX 32
 
 /*
  * You can use the NOT_YET_IMPLEMENTED macro to error out when you reach parts
@@ -83,6 +84,7 @@ static int uname_for_uid(uid_t uid, char* buf, size_t buflen) {
 static int group_for_gid(gid_t gid, char* buf, size_t buflen) {
     struct group* g = getgrgid(gid);
     if (g == NULL) {
+        snprintf(buf,buflen,"%d",gid);
         return 1;
     }
     strncpy(buf, g->gr_name, buflen);
@@ -156,7 +158,7 @@ bool test_file(char* pathandname) {
 bool is_dir(char* pathandname) {
     /* TODO: fillin */
     struct stat sb;
-    if(stat(pathandname,&sb)==-1){
+    if(lstat(pathandname,&sb)==-1){
         PRINT_ERROR("is_dir","couldn't open file or directory",pathandname);
         exit(1);
     }
@@ -169,8 +171,26 @@ const char* ftype_to_str(mode_t mode) {
     return "?";
 }
 
-long total; // 在-l模式下当前目录文件总大小
-int maxeidth; // 在-l模式下，表示此时文件所在目录下最大的文件的大小所需要的字符串宽度
+int maxwidth_sz; // 在-l模式下，表示此时文件所在目录下最大的文件的大小所需要的字符串宽度
+int maxwidth_usr;
+int maxwidth_grp;
+
+void get_sz_str(size_t size, char *sz_str,size_t len ,bool human_readable){
+    if(human_readable){
+        char units[]={'\0','K','M','G','T','P','E','Z','Y'};
+        int j=0;
+        double sz=(double) size;
+        while(sz>=1024.0){
+            sz/=1024;
+            j++;
+
+        }
+        snprintf(sz_str,len,"%.1f%c",sz, units[j]);
+        
+    }else{
+        snprintf(sz_str,len,"%ld",size);
+    }
+}
 
 /* list_file():
  * implement the logic for listing a single file.
@@ -199,7 +219,7 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
      * 输出详细信息
      */
     struct stat sb;
-    if (stat(pathandname, &sb) == -1){
+    if (lstat(pathandname, &sb) == -1){
         handle_error("couldn't open file or directory", pathandname);
         exit(1);
     }
@@ -222,12 +242,28 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
     //获取文件拥有者所在组
     char grpname[GRPNAME_MAX];
     group_for_gid(sb.st_gid, grpname, GRPNAME_MAX);
-    //获取文件大小
-    long size = sb.st_size;
     //获取创建日期
     char datestr[DATESTR_MAX];
     date_string(&sb.st_ctim, datestr, DATESTR_MAX);
-    printf("%s %d %s %s %5ld %s %s\n", permission, num_link, usrname, grpname, size, datestr, name);
+    //获取文件大小
+    long size = sb.st_size;
+    char *sz_str=malloc(WIDTHSTR_MAX*sizeof(char));
+    get_sz_str(size,sz_str, WIDTHSTR_MAX, human_readable);
+    char format_str[30];
+    snprintf(format_str, 30, "%%s %%d %%%ds %%%ds %%%ds %%s %%s", maxwidth_usr, maxwidth_grp, maxwidth_sz);
+    printf(format_str, permission, num_link, usrname, grpname, sz_str, datestr, name);
+    if(S_ISLNK(sb.st_mode)){
+        char *link_to = malloc(256*sizeof(char));
+        int len;
+        if((len=readlink(pathandname,link_to,256))==-1){
+            handle_error("read link faild",pathandname);
+        }
+        link_to[len]='\0';
+        printf(" -> %s",link_to);
+        free(link_to);
+    }
+    printf("\n");
+    free(sz_str);
     return;
 }
 
@@ -251,6 +287,12 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive, bool
      *       closedir()
      *   See the lab description for further hints
      */
+    //处理dirname是文件的情况
+    if(!is_dir(dirname)){
+        list_file(dirname,dirname,list_long,human_readable);
+        return;
+    }
+    //处理dirname是目录的情况
     DIR *dirp;
     if((dirp = opendir(dirname)) == NULL) {
         PRINT_ERROR("list_dir","couldn't open file",dirname);
@@ -261,26 +303,38 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive, bool
     if(dirname[i-1]=='/'){
         dirname[i-1]='\0';
     }
-    struct dirent *dp;
-    // 预处理,获取文件总大小，最大大小等信息
-    total= 0;
-    int maxsz = 0; // 在-l模式下，表示此时文件所在目录下最大的文件的大小
     struct stat sb;
+    struct dirent *dp;
+    // 预处理,获取最大的文件大小，输出所需字符串宽度等信息
     char *pathandname = (char *)malloc(PATH_MAX * sizeof(char));
+    maxwidth_sz=0;
+    maxwidth_grp=0;
+    maxwidth_usr=0;
     while((dp=readdir(dirp))!=NULL){
         snprintf(pathandname,PATH_MAX,"%s%s%s",dirname,"/",dp->d_name);
-        if (stat(pathandname, &sb) == -1){
+        if (lstat(pathandname, &sb) == -1){
             handle_error("couldn't open file or directory", pathandname);
             exit(1);
         }
-        total+=sb.st_size;
-        maxsz=sb.st_size>maxsz?sb.st_size:maxsz;
+        int len;
+        char *buf = malloc(WIDTHSTR_MAX * sizeof(char));
+        // 获取组名字符串最大宽度
+        group_for_gid(sb.st_gid, buf, GRPNAME_MAX);
+        len = strlen(buf);
+        maxwidth_grp = len > maxwidth_grp ? len : maxwidth_grp;
+        // 获取用户名字符串最大宽度
+        uname_for_uid(sb.st_uid, buf, USRNAME_MAX);
+        len = strlen(buf);
+        maxwidth_usr = len > maxwidth_usr ? len : maxwidth_usr;
+        // 获取文件大小字符串最大宽度
+        get_sz_str(sb.st_size, buf, WIDTHSTR_MAX, human_readable);
+        len = strlen(buf);
+        maxwidth_sz = len > maxwidth_sz ? len : maxwidth_sz;
+        free(buf);
     }
+    // -R模式下要先输出目录名
     if(recursive){
         printf("%s:\n",dirname);
-    }
-    if(list_long){
-        printf("total %ld\n",total);
     }
     // 非-R模式下的打印输出
     char *fname;
@@ -323,7 +377,7 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive, bool
         if(!is_dir(nxt_dirname))
             continue;
         
-        list_dir(nxt_dirname,list_long,list_all, recursive);
+        list_dir(nxt_dirname,list_long,list_all, recursive, human_readable);
     }
     free(nxt_dirname);
     closedir(dirp);
@@ -370,6 +424,7 @@ int main(int argc, char* argv[]) {
                 break;
             case 'h':
                 human_readable = true;
+                break;
             default:
                 printf("Unimplemented flag %d\n", opt);
                 break;
@@ -392,8 +447,6 @@ int main(int argc, char* argv[]) {
     for (int i = optind; i < argc; i++) {
         list_dir(argv[i], list_long, list_all, recursive, human_readable);
     }
-    NOT_YET_IMPLEMENTED("help");
-    NOT_YET_IMPLEMENTED("handle error");
-    NOT_YET_IMPLEMENTED("-h");
+    NOT_YET_IMPLEMENTED("help, handle error");
     exit(err_code);
 }
