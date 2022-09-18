@@ -120,6 +120,10 @@ static void help() {
     /* TODO: add to this */
     printf("ls: List files\n");
     printf("\t--help: Print this help\n");
+    printf("\t-a ,--all: do not ignore entries starting with .\n");
+    printf("\t-l: use a long listing format\n");
+    printf("\t-R ,--recursive: list subdirectories recursively\n");
+    printf("\t-h ,--human-readable: with -l and -s, print sizes like 1K 234M 2G etc.\n");
     exit(0);
 }
 
@@ -395,7 +399,10 @@ int main(int argc, char* argv[]) {
     // option` helps us parse arguments of the form `--FOO`. Refer to `man 3
     // getopt_long` for more information.
     struct option opts[] = {
-        {.name = "help", .has_arg = 0, .flag = NULL, .val = '\a'}};
+        {.name = "help", .has_arg = no_argument, .flag = NULL, .val = '\a'},
+        {.name = "all", .has_arg = no_argument, .flag = NULL, .val ='a'},
+        {.name = "human-readable", .has_arg=no_argument,.flag=NULL,.val='h'},
+        {.name = "recursive", .has_arg = no_argument, .flag = NULL, .val = 'R'}};
 
     // This loop is used for argument parsing. Refer to `man 3 getopt_long` to
     // better understand what is going on here.
@@ -447,6 +454,6 @@ int main(int argc, char* argv[]) {
     for (int i = optind; i < argc; i++) {
         list_dir(argv[i], list_long, list_all, recursive, human_readable);
     }
-    NOT_YET_IMPLEMENTED("help, handle error");
+    NOT_YET_IMPLEMENTED("handle error");
     exit(err_code);
 }
