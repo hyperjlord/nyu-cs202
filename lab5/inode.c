@@ -37,7 +37,75 @@ int
 inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool alloc)
 {
 	// LAB: Your code here.
-	panic("inode_block_walk not implemented");
+
+	int r;
+	// 一级间接块的地址
+	uint32_t *indirect_blkaddr = NULL;
+	// 二级间接块的地址
+	uint32_t *double_blkaddr = NULL;
+	if (filebno >= N_DIRECT + N_INDIRECT + N_DOUBLE)
+	{
+		return -EINVAL;
+	}
+	if (filebno < N_DIRECT)
+	{
+		printf("%u,%x\n",filebno,ino->i_direct);
+		*ppdiskbno =(ino->i_direct + filebno);
+	}
+	else if (filebno < N_DIRECT + N_INDIRECT)
+	{
+		// 如果间接块未被分配
+		if (!ino->i_indirect||block_is_free(ino->i_indirect))
+		{
+			if (!alloc)
+				return -ENOENT;
+			// 分配间接块
+			if ((r = alloc_block) < 0)
+				return -ENOSPC;
+			ino->i_indirect = r;
+			indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
+			memset(indirect_blkaddr, 0, BLKBITSIZE);
+		}
+		if (!indirect_blkaddr)
+			indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
+		*ppdiskbno = indirect_blkaddr + (filebno - N_DIRECT);
+	}
+	else
+	{
+		// 如果二级间接块未分配
+		if (!ino->i_double||block_is_free(ino->i_double))
+		{
+			if (!alloc)
+				return -ENOENT;
+			// 分配二级间接快
+			if ((r = alloc_block()) < 0)
+				return -ENOSPC;
+			ino->i_double=r;
+			// 获取二级间接快的地址
+			double_blkaddr = (uint32_t *)diskblock2memaddr(ino->i_double);
+			memset(double_blkaddr, 0, BLKSIZE);
+		}
+		if (!double_blkaddr)
+			double_blkaddr = (uint32_t *)diskblock2memaddr(ino->i_double);
+		// 如果一级间接块未被分配
+		if (!(r = double_blkaddr[(filebno - N_DIRECT - N_INDIRECT) / N_INDIRECT]))
+		{
+			if (!alloc)
+				return -ENOENT;
+			// 分配一级间接快
+			if ((r = alloc_block()) < 0)
+				return -ENOSPC;
+			double_blkaddr[(filebno - N_DIRECT - N_INDIRECT) / N_INDIRECT] = r;
+			// 获取一级间接块的地址
+			indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
+			memset(indirect_blkaddr, 0, BLKSIZE);
+		}
+		if (!indirect_blkaddr)
+			indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
+		*ppdiskbno = indirect_blkaddr + ((filebno - N_DIRECT - N_INDIRECT) % N_INDIRECT);
+	}
+	return 0;
+	// panic("inode_block_walk not implemented");
 }
 
 // Set *blk to the address in memory where the filebno'th block of
@@ -53,7 +121,24 @@ int
 inode_get_block(struct inode *ino, uint32_t filebno, char **blk)
 {
 	// LAB: Your code here.
-	panic("inode_get_block not implemented");
+	int r;
+	if (filebno >= N_DIRECT + N_INDIRECT + N_DOUBLE)
+	{
+		return -EINVAL;
+	}
+	uint32_t *pblkno;
+	if((r=inode_block_walk(ino,filebno,&pblkno,1))<0)
+		return r;	
+	// 如果inode的第filebno个block还未被分配
+	if(!(*pblkno)){
+		if((r=alloc_block())<0)
+			return r;
+		*pblkno=r;
+	}
+	r=*pblkno;
+	*blk=diskblock2memaddr(r);
+	return 0;
+	//panic("inode_get_block not implemented");
 }
 
 // Create "path".  On success set *pino to point at the inode and return 0.
