@@ -54,7 +54,7 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 	else if (filebno < N_DIRECT + N_INDIRECT)
 	{
 		// 如果间接块未被分配
-		if (!ino->i_indirect||block_is_free(ino->i_indirect))
+		if (!ino->i_indirect)
 		{
 			if (!alloc)
 				return -ENOENT;
@@ -62,17 +62,15 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 			if ((r = alloc_block()) < 0)
 				return -ENOSPC;
 			ino->i_indirect = r;
-			indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
-			memset(indirect_blkaddr, 0, BLKBITSIZE);
+			memset(diskblock2memaddr(r), 0, BLKSIZE);
 		}
-		if (!indirect_blkaddr)
-			indirect_blkaddr = (uint32_t *)diskblock2memaddr(ino->i_indirect);
+		indirect_blkaddr = (uint32_t *)diskblock2memaddr(ino->i_indirect);
 		*ppdiskbno = indirect_blkaddr + (filebno - N_DIRECT);
 	}
 	else
 	{
 		// 如果二级间接块未分配
-		if (!ino->i_double||block_is_free(ino->i_double))
+		if (!ino->i_double)
 		{
 			if (!alloc)
 				return -ENOENT;
@@ -80,12 +78,9 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 			if ((r = alloc_block()) < 0)
 				return -ENOSPC;
 			ino->i_double=r;
-			// 获取二级间接快的地址
-			double_blkaddr = (uint32_t *)diskblock2memaddr(ino->i_double);
-			memset(double_blkaddr, 0, BLKSIZE);
+			memset(diskblock2memaddr(r), 0, BLKSIZE);
 		}
-		if (!double_blkaddr)
-			double_blkaddr = (uint32_t *)diskblock2memaddr(ino->i_double);
+		double_blkaddr = (uint32_t *)diskblock2memaddr(ino->i_double);
 		// 如果一级间接块未被分配
 		if (!(r = double_blkaddr[(filebno - N_DIRECT - N_INDIRECT) / N_INDIRECT]))
 		{
@@ -95,12 +90,9 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 			if ((r = alloc_block()) < 0)
 				return -ENOSPC;
 			double_blkaddr[(filebno - N_DIRECT - N_INDIRECT) / N_INDIRECT] = r;
-			// 获取一级间接块的地址
-			indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
-			memset(indirect_blkaddr, 0, BLKSIZE);
+			memset(diskblock2memaddr(r), 0, BLKSIZE);
 		}
-		if (!indirect_blkaddr)
-			indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
+		indirect_blkaddr = (uint32_t *)diskblock2memaddr(r);
 		*ppdiskbno = indirect_blkaddr + ((filebno - N_DIRECT - N_INDIRECT) % N_INDIRECT);
 	}
 	return 0;
@@ -125,17 +117,17 @@ inode_get_block(struct inode *ino, uint32_t filebno, char **blk)
 	{
 		return -EINVAL;
 	}
-	uint32_t *pblkno;
-	if((r=inode_block_walk(ino,filebno,&pblkno,1))<0)
+	uint32_t *pbno;
+	if((r=inode_block_walk(ino,filebno,&pbno,1))<0)
 		return r;	
 	// 如果inode的第filebno个block还未被分配
-	if(!(*pblkno)){
+	if(!(*pbno)){
 		if((r=alloc_block())<0)
 			return r;
-		*pblkno=r;
+		*pbno=r;
+		memset(diskblock2memaddr(r),0,BLKSIZE);
 	}
-	r=*pblkno;
-	*blk=diskblock2memaddr(r);
+	*blk=diskblock2memaddr(*pbno);
 	return 0;
 	//panic("inode_get_block not implemented");
 }
@@ -289,30 +281,43 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 	uint32_t bno, old_nblocks, new_nblocks;
 	// LAB: Your code here.
 
-	uint32_t *indirect_blkaddr;
-	if(newsize>=ino->i_size)
+	int r;
+	uint32_t *double_blkaddr;
+	if (newsize >= ino->i_size)
 		return;
 
-	old_nblocks = ROUNDUP(ino->i_size, BLKBITSIZE) / BLKBITSIZE;
-	new_nblocks = ROUNDUP(newsize, BLKBITSIZE) / BLKBITSIZE;
-
-	for(int64_t i=old_nblocks-1;i>=(int64_t)new_nblocks;--i){
-		inode_free_block(ino,i);
-		uint32_t ii=(uint32_t)i;
-		if(ii>=N_DIRECT+N_INDIRECT){
-			if((ii-N_DIRECT-N_INDIRECT)%N_INDIRECT)
+	old_nblocks = ROUNDUP(ino->i_size, BLKSIZE) / BLKSIZE;
+	new_nblocks = ROUNDUP(newsize, BLKSIZE) / BLKSIZE;
+	// printf("newszie=%u,new_nblocks=%u\n",newsize,new_nblocks);
+	for (int64_t i = old_nblocks - 1; i >= (int64_t)new_nblocks; --i)
+	{
+		uint32_t ii = (uint32_t)i;
+		if ((r = inode_free_block(ino, ii)) < 0)
+			return;
+		if (ii >= N_DIRECT + N_INDIRECT)
+		{
+			if ((ii - N_DIRECT - N_INDIRECT) % N_INDIRECT)
 				continue;
-			bno=ino->i_double;
-			indirect_blkaddr=(uint32_t *)diskblock2memaddr(bno);
-			free_block(*(indirect_blkaddr+(ii-N_DIRECT-N_INDIRECT)/N_INDIRECT));
-			indirect_blkaddr[(ii-N_DIRECT-N_INDIRECT)/N_INDIRECT]=0;
-			if(ii-N_DIRECT-N_INDIRECT)
+			bno = ino->i_double;
+			if (!bno)
+				continue;
+			double_blkaddr = (uint32_t *)diskblock2memaddr(bno);
+			uint32_t pos = (ii - N_DIRECT - N_INDIRECT) / N_INDIRECT;
+			if (!double_blkaddr[pos])
+				continue;
+			free_block(double_blkaddr[pos]);
+			double_blkaddr[pos] = 0;
+			if (ii - N_DIRECT - N_INDIRECT)
 				continue;
 			free_block(bno);
-			ino->i_double=0;
-		}else if(ii-N_DIRECT==0){
+			ino->i_double = 0;
+		}
+		else if (ii == N_DIRECT)
+		{
+			if (!ino->i_indirect)
+				continue;
 			free_block(ino->i_indirect);
-			ino->i_indirect=0;
+			ino->i_indirect = 0;
 		}
 	}
 	//panic("inode_truncate_blocks not implemented");
@@ -377,11 +382,6 @@ inode_free(uint32_t inum)
 	free_block(inum);
 }
 
-// 根据地址获取对应的块号
-uint32_t address2diskblockno(uint64_t addr){
-	return (addr-(uint64_t)diskmap)/BLKSIZE;
-}
-
 // Unlink an inode by decrementing its link count and zeroing the name
 // and inum fields in its associated struct dirent.  If the link count
 // of the inode reaches 0, free the inode.
@@ -403,11 +403,10 @@ inode_unlink(const char *path)
 	if(r<0)
 		return r;
 	ino->i_nlink--;
-	memset(dent,0,sizeof(struct dirent));
 	if(!ino->i_nlink){
-		//printf("diskmap=%x,ino=%x,bno=%d\n",diskmap,ino,address2diskblockno(ino));
-		inode_free(address2diskblockno((uint64_t)ino));
+		inode_free(dent->d_inum);
 	}
+	memset(dent,0,sizeof(struct dirent));
 	return 0;
 	// panic("inode_unlink not implemented");
 }
@@ -426,21 +425,23 @@ inode_link(const char *srcpath, const char *dstpath)
 	//panic("inode_link not implemented");
 
 	int r;
-	struct inode *srcino,*dir;
+	uint32_t bno;
+	struct inode *ino,*dir;
 	struct dirent *dent;
 	char name[124];
-	r = walk_path(srcpath, NULL, &srcino, NULL, NULL);
-	if (r < 0)
-		return r;
 	r = walk_path(dstpath, &dir, NULL, NULL, name);
 	if (r == 0)
 		return -EEXIST;
+	r = walk_path(srcpath, NULL, &ino, &dent, NULL);
+	if (r < 0)
+		return r;
+	bno=dent->d_inum;
 	r=dir_alloc_dirent(dir, &dent);
 	if(r<0)
 		return r;
-	dent->d_inum = address2diskblockno((uint64_t)srcino);
-	snprintf(dent->d_name,124,"%s",name);
-	srcino->i_nlink++;
+	dent->d_inum = bno;
+	strncpy(dent->d_name,name,124);
+	ino->i_nlink++;
 	return 0;
 	
 }
